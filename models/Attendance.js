@@ -1,9 +1,11 @@
 const mongoose = require("mongoose");
+const Schema = mongoose.Schema;
 
 const fileSchema = new mongoose.Schema({
-  user:{ 
+  userId:{ 
     type: Schema.Types.ObjectId, 
-    ref: 'user'
+    ref: 'user',
+    required:true
   },
   fileName: {
     type: String,

@@ -1,19 +1,22 @@
 const express = require('express');
-const User = require('../models/User');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
+const crypto = require("crypto");
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const fetchuser = require('../middlewares/fetchuser')
-var nodemailer = require("nodemailer");
+
+const User = require('../models/User');
+const Token = require('../models/Token');
+const { fetchuser, isAdmin } = require('../middlewares/fetchuser')
 const { roles } = require('../Roles');
+const sendEmail = require('../verification/Email');
 
 require('dotenv').config();
 const JWT_secret = process.env.JWT_SECRET_KEY;
 
 // ************ USER AREA ************
 
-// Router -1 '/api/auth/createuser'
+// Router -1.1 '/api/auth/createuser'
 router.post('/createuser',
   [
     body('email', 'Enter valid email').isEmail(),
@@ -63,14 +66,44 @@ router.post('/createuser',
         password: securePassword
       })
 
+      // **** Saving Token for email verification purpose ****
+      let token = await new Token({
+        userId: user._id,
+        token: crypto.randomBytes(32).toString("hex"),
+      }).save();
+
+      const v_link = `${process.env.BASE_URL}/verify/${user.id}/${token.token}`;
+      sendEmail(v_link, email);
+
       // returning user id in Token
       const data = { user: { id: user.id } };
       const auth_token = jwt.sign(data, JWT_secret);
       res.json({ success: true, auth_token: auth_token });
     } catch (error) {
-      res.status(500).send({ success: false, message: error, from: "Internal server error" });
+      res.status(500).send({ success: false, message: error.message, from: "Create User | Catch Section" });
     }
   })
+// Router -1.2 For Email verification***********
+router.get("/verify/:id/:token", async (req, res) => {
+  try {
+    const user = await User.findOne({ _id: req.params.id });
+    if (!user) return res.status(400).send({ success: false, message: "Invalid link" });
+
+    const token = await Token.findOne({
+      userId: user._id,
+      token: req.params.token,
+    });
+    if (!token) return res.status(401).send({ success: false, message: "Invalid link" });
+
+    await User.updateOne({ _id: req.params.id }, { $set: { verified: true } });
+    await Token.findByIdAndRemove(token._id);
+
+    res.send({ success: true, message: "email verified sucessfully" });
+  } catch (error) {
+    res.status(400).send({ success: false, message: error.message, from: "Verify Email | Catch Section" });
+  }
+});
+
 
 // Router -2 '/api/auth/loginuser'
 router.post('/loginuser',
@@ -92,8 +125,8 @@ router.post('/loginuser',
         return res.status(400).json({ success: false, message: "Sorry user with this email id does not exist", from: "email already Exist" });
       }
 
-      if (user.isBlocked) {
-        return res.status(401).json({ success: false, message: "Sorry You are Blocked by admin", from: "You are Blocked" });
+      if (user.isBlocked || !user.verified) {
+        return res.status(401).json({ success: false, message: "Sorry You are Either Blocked by admin or Your email is not verified", from: "You are Blocked | email not verified" });
       }
 
       // Now Comparing password with help of bcryptjs
@@ -111,6 +144,7 @@ router.post('/loginuser',
     }
   })
 
+
 // Route:3 - Get Loggedin User details using:POST  "/api/auth/getuser"  Login required
 router.post('/getuser', fetchuser, async (req, res) => {
   try {
@@ -122,10 +156,14 @@ router.post('/getuser', fetchuser, async (req, res) => {
   }
 })
 
+
 // Route:4 - Get User details By using Id:POST.  "/api/auth/getUserById/:id".  Login required
 router.get('/getUserById/:id', fetchuser, async (req, res) => {
   try {
     const uploader = await User.findById(req.params.id).select("-password");//except password
+    if (!uploader) {
+      return res.status(401).send({ success: false, message: "User not Find with this Id!!!", from: "get User By Id" });
+    }
     res.send({ success: true, uploader: uploader });
   } catch (error) {
     res.status(509).json({ success: false, message: error.message, from: "Catch Section" });
@@ -136,13 +174,8 @@ router.get('/getUserById/:id', fetchuser, async (req, res) => {
 // ************ ADMIN AREA ************
 
 // Router:1 - fetch All user | ADMIN access only
-router.get('/getAllUsers', fetchuser, async (req, res) => {
+router.get('/getAllUsers', fetchuser, isAdmin, async (req, res) => {
   try {
-    const user = await User.findById(req.user_id);
-    if (user.role !== roles.ADMIN || user.isBlocked) {
-      return res.status(401).send({ success: false, message: "You are not allowed to do so!!", from: "Not admin or Blocked" });
-    }
-
     const allusers = await User.find();
     res.send({ success: true, allusers: allusers });
   } catch (error) {
@@ -150,14 +183,15 @@ router.get('/getAllUsers', fetchuser, async (req, res) => {
   }
 });
 
+
 // Route:2 - Block a User | ADMIN Access Only
-router.put('/blockAUser/:id', fetchuser, async (req, res) => {
+router.put('/blockAUser/:id', fetchuser, isAdmin, async (req, res) => {
   try {
     const user = await User.findById(req.user_id).select("-password");
     let target = await User.findById(req.params.id).select("-password");
 
-    if (user.role === roles.CLIENT || user.isBlocked || target.email === process.env.ADMIN_EMAIL1 || target.email === process.env.ADMIN_EMAIL2) {
-      return res.status(401).send({ success: false, message: "You are not allowed to do so!!", from: "Not admin or Blocked or traget is ADMIN" });
+    if (target.email === process.env.ADMIN_EMAIL1 || target.email === process.env.ADMIN_EMAIL2) {
+      return res.status(401).send({ success: false, message: "You are not allowed to do so!!", from: "traget is ADMIN" });
     }
 
     const result = await User.updateOne({ _id: req.params.id }, { $set: { "isBlocked": !target.isBlocked } });
@@ -167,5 +201,6 @@ router.put('/blockAUser/:id', fetchuser, async (req, res) => {
     res.status(500).send({ success: false, message: error.message, from: "blockAUser | Catch Section" });
   }
 });
+
 
 module.exports = router;

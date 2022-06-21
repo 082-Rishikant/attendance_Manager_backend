@@ -45,8 +45,8 @@ const FriendSchema = new mongoose.Schema({
   }
 });
 
-const FriendModel = mongoose.model("user", FriendSchema);
+const User = mongoose.model("user", FriendSchema);
 
-module.exports = FriendModel;
+module.exports = User;
 
 /// mongodb://127.0.0.1:27017

@@ -16,7 +16,7 @@ app.get('/favicon.ico', (req, res) => res.status(204));
 
 // all Routers are here
 app.use('/api/auth', require('./routes/auth'));
-// app.use('/api/attendance', require('./routes/Files'));
+app.use('/api/file', require('./routes/Files'));
 
 app.listen(port, () => {
   console.log(`App is listening on port ${port}`);
